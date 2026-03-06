@@ -1,29 +1,26 @@
-import React, { createContext, useReducer, useContext } from 'react';
+import React, { createContext, useReducer, useContext, useEffect } from 'react';
 import { dummyExpenses, dummyGamification, categories } from '../data/dummyData';
 
 const ExpenseContext = createContext();
 
-// Function to calculate balances from expenses
 const calculateBalances = (expenses, members) => {
   const balances = {};
   members.forEach(member => balances[member] = 0);
-
   expenses.forEach(expense => {
     const splitAmount = expense.amount / expense.participants.length;
     expense.participants.forEach(participant => {
       if (participant !== expense.paidBy) {
-        balances[participant] -= splitAmount;
-        balances[expense.paidBy] += splitAmount;
+        balances[participant] = (balances[participant] || 0) - splitAmount;
+        balances[expense.paidBy] = (balances[expense.paidBy] || 0) + splitAmount;
       }
     });
   });
-
   return balances;
 };
 
 const initialMembers = ['Alice', 'Bob', 'Charlie'];
 
-const initialState = {
+const defaultState = {
   group: {
     name: 'Flat 3B',
     members: initialMembers,
@@ -32,83 +29,101 @@ const initialState = {
   expenses: dummyExpenses,
   balances: calculateBalances(dummyExpenses, initialMembers),
   gamification: dummyGamification,
-  categories
+  categories,
+  budget: { monthly: 500, currency: 'USD' }
 };
+
+const loadState = () => {
+  try {
+    const saved = localStorage.getItem('expenseTrackerState');
+    if (saved) {
+      const parsed = JSON.parse(saved);
+      // Recalculate balances to ensure they are in sync
+      parsed.balances = calculateBalances(parsed.expenses, parsed.group.members);
+      return parsed;
+    }
+  } catch (e) {
+    console.warn('Could not load saved state', e);
+  }
+  return defaultState;
+};
+
+const initialState = loadState();
 
 const expenseReducer = (state, action) => {
   switch (action.type) {
-    case 'ADD_EXPENSE':
+    case 'ADD_EXPENSE': {
       const newExpense = action.payload;
       const updatedExpenses = [...state.expenses, newExpense];
-
-      // Calculate new balances
-      const newBalances = { ...state.balances };
-      const splitAmount = newExpense.amount / newExpense.participants.length;
-
-      newExpense.participants.forEach(participant => {
-        if (participant !== newExpense.paidBy) {
-          newBalances[participant] = (newBalances[participant] || 0) - splitAmount;
-          newBalances[newExpense.paidBy] = (newBalances[newExpense.paidBy] || 0) + splitAmount;
-        }
-      });
-
-      // Update gamification
-      const updatedGamification = { ...state.gamification };
-      updatedGamification.points += 10; // Points for logging expense
-      updatedGamification.streaks.logging += 1;
-
-      return {
-        ...state,
-        expenses: updatedExpenses,
-        balances: newBalances,
-        gamification: updatedGamification
+      const newBalances = calculateBalances(updatedExpenses, state.group.members);
+      const updatedGamification = {
+        ...state.gamification,
+        points: state.gamification.points + 10,
+        streaks: { ...state.gamification.streaks, logging: state.gamification.streaks.logging + 1 }
       };
+      return { ...state, expenses: updatedExpenses, balances: newBalances, gamification: updatedGamification };
+    }
 
-    case 'SETTLE_BALANCE':
-      // Simple settle: assume settling with one person
-      const { from, to, amount } = action.payload;
-      const settledBalances = { ...state.balances };
-      settledBalances[from] += amount;
-      settledBalances[to] -= amount;
+    case 'DELETE_EXPENSE': {
+      const updatedExpenses = state.expenses.filter(e => e.id !== action.payload);
+      const newBalances = calculateBalances(updatedExpenses, state.group.members);
+      return { ...state, expenses: updatedExpenses, balances: newBalances };
+    }
 
-      const settledGamification = { ...state.gamification };
-      settledGamification.points += 15; // Points for settling
-      settledGamification.streaks.settling += 1;
-
-      return {
-        ...state,
-        balances: settledBalances,
-        gamification: settledGamification
+    case 'SETTLE_BALANCE': {
+      const { from, to } = action.payload;
+      // Create a settle-up expense record
+      const settleExpense = {
+        id: Date.now(),
+        amount: Math.abs(state.balances[from]),
+        category: 'Settlement',
+        description: `${from} settled up with ${to}`,
+        paidBy: from,
+        date: new Date().toISOString().split('T')[0],
+        participants: [from, to],
+        isSettlement: true
       };
+      const updatedExpenses = [...state.expenses, settleExpense];
+      const newBalances = calculateBalances(updatedExpenses, state.group.members);
+      const updatedGamification = {
+        ...state.gamification,
+        points: state.gamification.points + 15,
+        streaks: { ...state.gamification.streaks, settling: state.gamification.streaks.settling + 1 }
+      };
+      return { ...state, expenses: updatedExpenses, balances: newBalances, gamification: updatedGamification };
+    }
 
-    case 'ADD_MEMBER':
+    case 'ADD_MEMBER': {
       const newMember = action.payload;
       const updatedMembers = [...state.group.members, newMember];
-      const updatedBalances = { ...state.balances };
-      updatedBalances[newMember] = 0;
+      const newBalances = { ...state.balances, [newMember]: 0 };
+      return { ...state, group: { ...state.group, members: updatedMembers }, balances: newBalances };
+    }
 
-      return {
-        ...state,
-        group: {
-          ...state.group,
-          members: updatedMembers
-        },
-        balances: updatedBalances
-      };
-
-    case 'REMOVE_MEMBER':
+    case 'REMOVE_MEMBER': {
       const memberToRemove = action.payload;
       const filteredMembers = state.group.members.filter(m => m !== memberToRemove);
-      const { [memberToRemove]: removed, ...remainingBalances } = state.balances;
-
+      const updatedExpenses = state.expenses.filter(e => e.paidBy !== memberToRemove && !e.participants.includes(memberToRemove));
+      const newBalances = calculateBalances(updatedExpenses, filteredMembers);
       return {
         ...state,
-        group: {
-          ...state.group,
-          members: filteredMembers
-        },
-        balances: remainingBalances
+        group: { ...state.group, members: filteredMembers },
+        expenses: updatedExpenses,
+        balances: newBalances
       };
+    }
+
+    case 'SET_CURRENT_USER': {
+      return { ...state, group: { ...state.group, currentUser: action.payload } };
+    }
+
+    case 'SET_BUDGET': {
+      return { ...state, budget: { ...state.budget, ...action.payload } };
+    }
+
+    case 'SET_GROUP_NAME': {
+      return { ...state, group: { ...state.group, name: action.payload } };
+    }
 
     default:
       return state;
@@ -117,6 +132,15 @@ const expenseReducer = (state, action) => {
 
 export const ExpenseProvider = ({ children }) => {
   const [state, dispatch] = useReducer(expenseReducer, initialState);
+
+  // Persist state to localStorage on every change
+  useEffect(() => {
+    try {
+      localStorage.setItem('expenseTrackerState', JSON.stringify(state));
+    } catch (e) {
+      console.warn('Could not save state', e);
+    }
+  }, [state]);
 
   return (
     <ExpenseContext.Provider value={{ state, dispatch }}>
@@ -127,9 +151,7 @@ export const ExpenseProvider = ({ children }) => {
 
 export const useExpense = () => {
   const context = useContext(ExpenseContext);
-  if (!context) {
-    throw new Error('useExpense must be used within an ExpenseProvider');
-  }
+  if (!context) throw new Error('useExpense must be used within an ExpenseProvider');
   return context;
 };
 
