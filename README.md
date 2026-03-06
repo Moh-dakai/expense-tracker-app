@@ -53,7 +53,7 @@ Before running this application, make sure you have:
 
 1. **Clone the repository**
    ```bash
-   git clone https://github.com/your-username/expense-tracker-app.git
+   git clone https://github.com/Moh-dakai/expense-tracker-app.git
    cd expense-tracker-app
    ```
 
