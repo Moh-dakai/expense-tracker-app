@@ -43,13 +43,6 @@ const Balances = () => {
   // Personal balance
   const personalBalance = state.balances[state.group.currentUser] || 0;
 
-  // Find who current user owes (positive balance = you owe others)
-  const findCreditor = () => {
-    // The person with the most negative balance is owed the most
-    return state.group.members
-      .filter(m => m !== state.group.currentUser && (state.balances[m] || 0) < 0)
-      .sort((a, b) => (state.balances[a] || 0) - (state.balances[b] || 0))[0];
-  };
 
   const openSettle = (member) => {
     const balance = state.balances[member] || 0;
